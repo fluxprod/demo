@@ -1250,6 +1250,7 @@
   var FILES = ['ex1','ex2','ex3'];
   // -2 дБ для версии «до»: 10^(-2/20) = 0.794
   var TRIM = [0.794, 1.0];
+  var FADE_OUT = 3;   // гашение в конце
 
   function pair(){ return pairs[ex]; }
   function buf(){ var pr = pair(); if (!pr) return null; return cur === 1 ? pr.b : pr.a; }
