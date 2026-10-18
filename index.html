@@ -427,7 +427,6 @@
   .ab-time{font-size:10.5px;color:rgba(252,252,252,.55);font-variant-numeric:tabular-nums;white-space:nowrap;flex:0 0 auto}
 
   .ab-sub{margin-top:7px;font-size:10.5px;line-height:1.45;color:rgba(252,252,252,.58);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-  .ab-wave{display:block;width:100%;height:56px;margin-top:12px}
   .ab-ex{display:flex;gap:6px;margin-top:11px}
   .ab-ex button{
     flex:1 1 0;min-height:44px;border-radius:9px;border:1px solid rgba(252,252,252,.14);
@@ -531,8 +530,6 @@
         <button type="button" data-v="0" class="on">до</button>
         <button type="button" data-v="1">после</button>
       </div>
-
-      <canvas id="abWave" class="ab-wave" aria-hidden="true"></canvas>
 
       <div class="ab-ex" id="abEx" role="group" aria-label="Пример">
         <button type="button" data-p="0">01</button>
@@ -1204,49 +1201,6 @@
   var vBtns = [].slice.call(sw.querySelectorAll('button'));
   var mainAudio = document.getElementById('audio');
 
-  // волна: показываем амплитуду только у версии «после»
-  var waveCv = document.getElementById('abWave');
-  var wob = waveCv ? waveCv.getContext('2d') : null;
-  var analyser = null, wRaf = 0, wPhase = 0, wAmp = 0;
-  function initWave(){
-    if (!wob) return;
-    var dpr = Math.min(2, window.devicePixelRatio || 1);
-    waveCv.width = Math.max(1, Math.round(waveCv.clientWidth * dpr));
-    waveCv.height = Math.max(1, Math.round(waveCv.clientHeight * dpr));
-    wob.setTransform(dpr, 0, 0, dpr, 0, 0);
-  }
-  function drawWave(){
-    wRaf = requestAnimationFrame(drawWave);
-    if (!wob) return;
-    var w = waveCv.clientWidth, h = waveCv.clientHeight;
-    var live = playing && cur === 1 && analyser;
-    var target = 0;
-    if (live){
-      var arr = new Uint8Array(analyser.fftSize);
-      analyser.getByteTimeDomainData(arr);
-      var sum = 0;
-      for (var i = 0; i < arr.length; i++){ var v = (arr[i] - 128) / 128; sum += v * v; }
-      target = Math.min(1, Math.sqrt(sum / arr.length) * 7);
-    }
-    wAmp += (target - wAmp) * 0.12;
-    if (wAmp > 0.004) wPhase += 0.06 + wAmp * 0.12; else wPhase += 0.012;
-    wob.clearRect(0, 0, w, h);
-    var mid = h / 2, amp = h * 0.42 * wAmp;
-    wob.beginPath();
-    for (var x = 0; x <= w; x += 2){
-      var t = x / w;
-      var env = Math.sin(Math.PI * t);
-      var y = mid + Math.sin(t * 7.5 + wPhase) * amp * env * (0.7 + 0.3 * Math.sin(t * 3 + wPhase * 0.7));
-      if (x === 0) wob.moveTo(x, y); else wob.lineTo(x, y);
-    }
-    wob.lineWidth = 2;
-    wob.strokeStyle = wAmp > 0.02 ? 'rgba(219,255,69,.95)' : 'rgba(252,252,252,.22)';
-    wob.shadowBlur = wAmp > 0.02 ? 12 : 0;
-    wob.shadowColor = 'rgba(219,255,69,.55)';
-    wob.stroke();
-    wob.shadowBlur = 0;
-  }
-
   var FILES = ['ex1','ex2','ex3'];
   // -2 дБ для версии «до»: 10^(-2/20) = 0.794
   var TRIM = [0.794, 1.0];
@@ -1316,7 +1270,25 @@
   }
 
   // обе версии стартуют одновременно: переключение = только громкость, без стыков
-  function startBoth(from){
+  async function selectExample(i){
+    chosen = true;
+    exBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.p === i); });
+    if (i === ex) return;
+    var wasPlaying = playing;
+    killSrc();
+    ex = i;
+    offset = 0;
+    paint();
+    stage.innerHTML = 'сравни <em>до</em> и <em>после</em>';
+    if (!pairs[ex]){
+      stage.textContent = 'загружаю…';
+      try { await loadPair(ex); } catch(e){ stage.textContent = 'не загрузилось'; return; }
+    }
+    paint();
+    if (wasPlaying) startBoth(0);
+  }
+
+
     killSrc();
     if (mainAudio) mainAudio.pause();
     var pr = pairs[ex];
@@ -1385,7 +1357,6 @@
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
       master = ctx.createGain(); master.gain.value = 1.0; master.connect(ctx.destination);
-      try { analyser = ctx.createAnalyser(); analyser.fftSize = 1024; master.connect(analyser); } catch(e){}
     }
     if (!pairs[ex]){
       stage.textContent = 'загружаю…';
@@ -1454,14 +1425,10 @@
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
       master = ctx.createGain(); master.gain.value = 1.0; master.connect(ctx.destination);
-      try { analyser = ctx.createAnalyser(); analyser.fftSize = 1024; master.connect(analyser); } catch(e){}
     }
     load().catch(function(){});
   }
   boot();
-  initWave();
-  drawWave();
-  window.addEventListener('resize', initWave);
 
   document.addEventListener('touchstart', function(){ if (ctx && ctx.state === 'suspended') ctx.resume(); }, {passive:true});
   document.addEventListener('click', function(){ if (ctx && ctx.state === 'suspended') ctx.resume(); });
