@@ -1327,6 +1327,7 @@
 
   async function selectExample(i){
     chosen = true;
+    exBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.p === i); });
     if (i === ex) return;
     var wasPlaying = playing;
     killSrc();
