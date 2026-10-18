@@ -1274,7 +1274,7 @@
       var ch = b.getChannelData(0), s = 0, n = 0;
       for (var i = 0; i < ch.length; i += 97){ s += ch[i] * ch[i]; n++; }
       var r = Math.sqrt(s / Math.max(1, n));
-      pr[key] = Math.max(0.28, Math.min(3.2, 0.11 / Math.max(0.02, r)));
+      pr[key] = Math.max(0.28, Math.min(3.4, 0.17 / Math.max(0.02, r)));
     }
     return pr[key];
   }
@@ -1286,7 +1286,7 @@
     var made = makeSource(buf(), at, from);
     src = made.s; gain = made.g;
     var f0 = Math.max(0, from);
-    var fin = (ex === 0 && f0 < 0.1) ? FADE_IN_ONE : 0.02;
+    var fin = (f0 < 0.1 && ex < 3) ? Math.max(0.03, FADE_IN_ONE * (f0 < 0.1 ? 1 : 0)) : 0.03;
     envelope(gain, buf().duration, f0, at, TRIM[cur] * levelOf(cur), fin);
     startedAt = at;
     offset = Math.max(0, Math.min(len() - 0.05, from));
@@ -1299,6 +1299,7 @@
   // бесшовная смена версии: новая стартует в тот же момент, старая гаснет за 40 мс
   function switchVersion(next){
     if (next === cur) return;
+    var prev = cur;
     var atPos = now();
     if (!playing){
       cur = next;
@@ -1313,13 +1314,13 @@
     vBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.v === cur); });
     var made = makeSource(buf(), T, pos);
     var oldS = src, oldG = gain;
-    envelope(made.g, buf().duration, pos, T - 0.01, TRIM[next] * levelOf(next), 0.04);
+    envelope(made.g, buf().duration, pos, T - 0.02, TRIM[next] * levelOf(next), 0.06);
     if (oldG){
       oldG.gain.cancelScheduledValues(T - 0.02);
-      oldG.gain.setValueAtTime(1, T - 0.01);
-      oldG.gain.linearRampToValueAtTime(0, T + 0.03);
+      oldG.gain.setValueAtTime(TRIM[prev] * levelOf(prev), T - 0.01);
+      oldG.gain.linearRampToValueAtTime(0, T + 0.05);
     }
-    if (oldS){ try{ oldS.stop(T + 0.05); }catch(e){} }
+    if (oldS){ try{ oldS.stop(T + 0.09); }catch(e){} }
     src = made.s; gain = made.g;
     startedAt = T; offset = pos;
     paint();
@@ -1348,7 +1349,7 @@
     if (!ctx){
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
-      master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
+      master = ctx.createGain(); master.gain.value = 1.0; master.connect(ctx.destination);
     }
     if (!pairs[ex]){
       stage.textContent = 'загружаю…';
@@ -1416,7 +1417,7 @@
     if (!ctx){
       ctx = new (window.AudioContext || window.webkitAudioContext)();
       try { if (navigator.audioSession) navigator.audioSession.type = 'playback'; } catch(e){}
-      master = ctx.createGain(); master.gain.value = 0.9; master.connect(ctx.destination);
+      master = ctx.createGain(); master.gain.value = 1.0; master.connect(ctx.destination);
     }
     load().catch(function(){});
   }
