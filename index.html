@@ -1191,7 +1191,7 @@
   var ctx = null, master = null;
   var pairs = [];           // [{a: AudioBuffer, b: AudioBuffer}]
   var ex = 0, cur = 0;      // пример и версия (0 до, 1 после)
-  var src = null, gain = null;
+  var srcA = null, srcB = null, gainA = null, gainB = null;
   var playing = false, startedAt = 0, offset = 0, raf = 0;
 
   var $ = function(id){ return document.getElementById(id); };
@@ -1224,8 +1224,9 @@
   }
 
   function killSrc(){
-    if (src){ try{ src.stop(); }catch(e){} src.disconnect(); src = null; }
-    if (gain){ gain.disconnect(); gain = null; }
+    [srcA, srcB].forEach(function(s){ if (s){ try{ s.stop(); }catch(e){} s.disconnect(); } });
+    [gainA, gainB].forEach(function(g){ if (g){ try{ g.disconnect(); }catch(e){} } });
+    srcA = srcB = gainA = gainB = null;
     cancelAnimationFrame(raf);
     playing = false;
     play.classList.remove('on');
@@ -1242,107 +1243,79 @@
     raf = requestAnimationFrame(tickFn);
   }
 
-  function makeSource(buffer, at, from){
-    var s2 = ctx.createBufferSource();
-    s2.buffer = buffer;
-    var g = ctx.createGain();
-    g.gain.value = 0;
-    s2.connect(g); g.connect(master);
-    s2.start(at, Math.max(0, Math.min(buffer.duration - 0.02, from)));
-    return { s: s2, g: g };
-  }
-
-  var FADE_OUT = 3, FADE_IN_ONE = 1.0;
-  function envelope(g, dur, from, at, lvl, fin){
-    var endAt = at + Math.max(0.05, dur - from);
-    g.gain.setValueAtTime(fin > 0 ? 0 : lvl, at);
-    if (fin > 0) g.gain.linearRampToValueAtTime(lvl, at + Math.min(fin, Math.max(0.05, endAt - at)));
-    var outStart = Math.max(at + fin, endAt - FADE_OUT);
-    if (endAt - outStart > 0.05){
+  // затухание в конце файла
+  function scheduleOut(g, lvl, startPos, at, dur){
+    var endAt = at + Math.max(0.05, dur - startPos);
+    var outStart = endAt - FADE_OUT;
+    if (outStart > at + 0.2){
       g.gain.setValueAtTime(lvl, outStart);
       g.gain.linearRampToValueAtTime(0, endAt);
     }
   }
 
-  // приводим все версии к одной громкости: считаем RMS и подбираем усиление
-  function levelOf(v){
-    var pr = pairs[ex];
-    if (!pr) return 1;
-    var key = v === 1 ? 'gb' : 'ga';
-    if (!pr[key]){
-      var b = v === 1 ? pr.b : pr.a;
-      var ch = b.getChannelData(0), s = 0, n = 0;
-      for (var i = 0; i < ch.length; i += 97){ s += ch[i] * ch[i]; n++; }
-      var r = Math.sqrt(s / Math.max(1, n));
-      pr[key] = Math.max(0.28, Math.min(3.4, 0.17 / Math.max(0.02, r)));
-    }
-    return pr[key];
-  }
-
-  function playFrom(from){
+  // обе версии стартуют одновременно: переключение = только громкость, без стыков
+  function startBoth(from){
     killSrc();
     if (mainAudio) mainAudio.pause();
-    var at = ctx.currentTime + 0.06;
-    var made = makeSource(buf(), at, from);
-    src = made.s; gain = made.g;
-    var f0 = Math.max(0, from);
-    var fin = (f0 < 0.1 && ex < 3) ? Math.max(0.03, FADE_IN_ONE * (f0 < 0.1 ? 1 : 0)) : 0.03;
-    envelope(gain, buf().duration, f0, at, TRIM[cur] * levelOf(cur), fin);
+    var pr = pairs[ex];
+    if (!pr) return;
+    var at = ctx.currentTime + 0.08;
+    var f0 = Math.max(0, Math.min(pr.a.duration - 0.05, from));
+
+    function mk(buffer, lvl, on){
+      var s = ctx.createBufferSource();
+      s.buffer = buffer;
+      var g = ctx.createGain();
+      g.gain.value = 0;
+      s.connect(g); g.connect(master);
+      s.start(at, Math.max(0, Math.min(buffer.duration - 0.02, f0)));
+      if (on){
+        g.gain.setValueAtTime(0, at);
+        g.gain.linearRampToValueAtTime(lvl, at + 0.05);
+        scheduleOut(g, lvl, f0, at, buffer.duration);
+      }
+      return [s, g];
+    }
+
+    var lvA = TRIM[0] * levelOf(0), lvB = TRIM[1] * levelOf(1);
+    var A = mk(pr.a, lvA, cur === 0);
+    var B = mk(pr.b, lvB, cur === 1);
+    srcA = A[0]; gainA = A[1]; srcB = B[0]; gainB = B[1];
+
     startedAt = at;
-    offset = Math.max(0, Math.min(len() - 0.05, from));
+    offset = f0;
     playing = true;
     play.classList.add('on');
     paint();
     raf = requestAnimationFrame(tickFn);
   }
 
-  // бесшовная смена версии: новая стартует в тот же момент, старая гаснет за 40 мс
+  // переключение версии: 60 мс кроссфейд между двумя уже играющими источниками
   function switchVersion(next){
     if (next === cur) return;
-    var prev = cur;
-    var atPos = now();
-    if (!playing){
-      cur = next;
-      vBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.v === cur); });
-      offset = Math.min(atPos, len() - 0.05);
-      paint();
-      return;
-    }
-    var T = ctx.currentTime + 0.05;
-    var pos = Math.min(atPos + 0.05, len() - 0.06);
     cur = next;
     vBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.v === cur); });
-    var made = makeSource(buf(), T, pos);
-    var oldS = src, oldG = gain;
-    envelope(made.g, buf().duration, pos, T - 0.02, TRIM[next] * levelOf(next), 0.06);
-    if (oldG){
-      oldG.gain.cancelScheduledValues(T - 0.02);
-      oldG.gain.setValueAtTime(TRIM[prev] * levelOf(prev), T - 0.01);
-      oldG.gain.linearRampToValueAtTime(0, T + 0.05);
-    }
-    if (oldS){ try{ oldS.stop(T + 0.09); }catch(e){} }
-    src = made.s; gain = made.g;
-    startedAt = T; offset = pos;
-    paint();
-  }
+    if (!playing){ offset = Math.min(now(), len() - 0.05); paint(); return; }
 
-  async function selectExample(i){
-    chosen = true;
-    exBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.p === i); });
-    if (i === ex) return;
-    var wasPlaying = playing;
-    killSrc();
-    ex = i;
-    offset = 0;
-    exBtns.forEach(function(x){ x.classList.toggle('on', +x.dataset.p === ex); });
-    paint();
-    stage.innerHTML = 'сравни <em>до</em> и <em>после</em>';
-    if (!pairs[ex]){
-      stage.textContent = 'загружаю…';
-      try { await loadPair(ex); } catch(e){ stage.textContent = 'не загрузилось'; return; }
+    var T = ctx.currentTime + 0.02;
+    var lvA = TRIM[0] * levelOf(0), lvB = TRIM[1] * levelOf(1);
+    var toB = (cur === 1);
+    var up = toB ? gainB : gainA, down = toB ? gainA : gainB;
+    var upLvl = toB ? lvB : lvA;
+    var dur = buf().duration, pos = now() + 0.02;
+
+    if (up){
+      up.gain.cancelScheduledValues(T - 0.01);
+      up.gain.setValueAtTime(0, T);
+      up.gain.linearRampToValueAtTime(upLvl, T + 0.06);
+      scheduleOut(up, upLvl, pos, T, dur);
+    }
+    if (down){
+      down.gain.cancelScheduledValues(T - 0.01);
+      down.gain.setValueAtTime(down.gain.value || 0, T);
+      down.gain.linearRampToValueAtTime(0, T + 0.06);
     }
     paint();
-    if (wasPlaying) start(0);
   }
 
   async function start(from){
@@ -1356,7 +1329,7 @@
       try { await loadPair(ex); } catch(e){ stage.textContent = 'не загрузилось'; return; }
     }
     if (ctx.state === 'suspended') { try { await ctx.resume(); } catch(e){} }
-    playFrom(from);
+    startBoth(from);
   }
 
   // грузим по одному примеру и только когда он нужен
@@ -1396,7 +1369,7 @@
         seekEl.dragging = false;
         if (!pairs.length) return;
         offset = toOf();
-        if (playing) playFrom(offset); else paint();
+        if (playing) startBoth(offset); else paint();
       });
     });
   }
